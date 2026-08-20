@@ -2,38 +2,128 @@
 
 A vectorized **Monte Carlo counterparty credit risk (CCR)** engine in Python. It
 simulates correlated market risk factors, reprices a derivatives portfolio along
-every path, and computes the exposure and credit-valuation metrics banks use to
-measure and price counterparty default risk.
+every path, aggregates trades into collateralized netting sets, and computes the
+exposure and credit-valuation metrics banks use to measure and price counterparty
+default risk.
 
-> ⚠️ **Status: under active development.** Architecture and scope below are the
-> agreed design; implementation is in progress.
+```
+Hull–White rates  ─┐
+                   ├─►  reprice swaps & options  ─►  net + collateralize  ─►  EE · PFE · CVA
+GBM equity        ─┘        along every path            (CSA, MPoR)
+     (correlated)
+```
 
-## What it does
+## Highlights
 
-- **Risk-factor simulation** — a **Hull–White 1-factor** short-rate model and a
-  **Geometric Brownian Motion** equity process, evolved jointly under a
-  correlation matrix (Cholesky-factorized shocks) over a configurable time grid.
-- **Analytic repricing along paths** — **interest-rate swaps** and **European
-  equity options** are revalued at every simulated date/state in closed form
-  (no nested simulation), producing full mark-to-market cubes of shape
-  `(paths × time steps)`.
-- **Collateralized netting sets** — trades aggregate into netting sets with a
-  **CSA** margin agreement (threshold, minimum transfer amount, and a
-  **margin period of risk** so collateral realistically lags exposure).
-- **Exposure & credit metrics**
-  - Expected Exposure (**EE**), Expected Positive/Negative Exposure (**EPE/ENE**)
-  - Potential Future Exposure (**PFE**) at a configurable confidence level
-  - Unilateral **CVA** from a hazard-rate/CDS-implied default curve and LGD
+- **Correlated multi-factor simulation** — a **Hull–White 1-factor** short rate and
+  a **GBM** equity process, evolved jointly under a correlation matrix
+  (Cholesky-coupled shocks), with the equity drift driven by the *simulated* rate.
+- **Analytic path repricing** — **interest-rate swaps** (dual-curve: OIS discounting
+  + forecast-curve forwards) and **European equity options** (Black–Scholes at the
+  simulated state) revalued in closed form at every node — no nested Monte Carlo.
+- **Collateralized netting sets** — a **CSA** with threshold, minimum transfer
+  amount, and a **margin period of risk**, so collateral realistically lags exposure.
+- **Industry metrics** — Expected Exposure (**EE/EPE/ENE**), Potential Future
+  Exposure (**PFE**) at a chosen confidence, and unilateral **CVA** from a
+  hazard-rate / CDS-implied default curve.
+- **Correct-by-construction** — the Hull–White model reprices today's discount curve
+  to 1e-10; every numerical unit is pinned to an analytic benchmark (**47 tests**).
 
-## Tech
+## Install
 
-Python · NumPy · SciPy · pandas · Streamlit (interactive dashboard)
+```bash
+python -m venv .venv && source .venv/bin/activate
+pip install -e ".[dashboard,notebook,dev]"
+```
 
-## Interface
+## Quickstart (library)
 
-- Importable library (`models/`, `instruments/`, `engine/`, `metrics/`)
-- Streamlit dashboard with controls for the portfolio, confidence level, and CSA
-  terms, plotting live exposure profiles, the PFE envelope, and CVA
+```python
+from ccr.config import MarketConfig, ScenarioConfig, SimConfig
+from ccr.engine import CSA, run
+from ccr.instruments import InterestRateSwap, EuropeanEquityOption
+from ccr.metrics import HazardCurve
+
+scenario = ScenarioConfig(
+    portfolio=[
+        InterestRateSwap(10_000_000, 0.025, 0.0, 5.0, 0.5, pay_fixed=True),
+        EuropeanEquityOption(100.0, 3.0, 0.25, is_call=True, notional=50_000),
+    ],
+    market=MarketConfig(flat_rate=0.03, equity_sigma=0.22, rho_rate_equity=0.30),
+    sim=SimConfig(n_paths=40_000, n_steps=60, horizon=5.0, seed=1, pfe_level=0.975),
+    collateral=CSA(threshold=250_000, min_transfer_amount=50_000, mpor_years=10/252),
+    hazard=HazardCurve.from_cds_spread(spread_bps=150, recovery=0.4),
+)
+
+result = run(scenario)
+print(result)                 # EPE, Max PFE, CVA
+print(result.profile_frame()) # EE / ENE / PFE by time
+```
+
+## CLI
+
+```bash
+ccr examples/sample_scenario.py          # human-readable
+ccr examples/sample_scenario.py --json   # machine-readable metrics
+```
+
+## Interactive dashboard
+
+```bash
+streamlit run src/ccr/dashboard/app.py
+```
+
+Sidebar controls for the portfolio, model parameters, CSA terms, credit curve, and
+Monte Carlo settings; live plots of the exposure profile (EE / PFE / ENE), the
+exposure distribution at a chosen horizon, CVA contribution over time, and sample
+simulated rate/equity paths.
+
+## Notebook
+
+`notebooks/example_walkthrough.ipynb` walks through the exposure profile, the effect
+of collateral, the netting benefit, and the exposure distribution with plots.
+
+## Architecture
+
+A one-directional pipeline of NumPy arrays shaped `(n_paths, n_points)`:
+
+| Layer | Module | Responsibility |
+|---|---|---|
+| Models | `ccr.models` | Correlated Hull–White rates + GBM equity on a time grid; analytic bonds |
+| Instruments | `ccr.instruments` | Signed mark-to-market of each trade at every (path, node) |
+| Engine | `ccr.engine` | Netting (sum before floor) + collateral (CSA / MPoR) → exposure cube |
+| Metrics | `ccr.metrics` | EE / EPE / ENE, PFE quantile, CVA → `ExposureResult` |
+| Dashboard | `ccr.dashboard` | Streamlit shell over the library |
+
+Design notes: `docs/superpowers/specs/2026-08-20-counterparty-risk-simulator-design.md`.
+
+## What the metrics mean
+
+| Metric | Definition |
+|---|---|
+| **EE(t)** | Mean discounted positive exposure across paths at time *t* |
+| **EPE** | Time-weighted average of EE (the regulatory EAD input) |
+| **ENE(t)** | Mean discounted negative exposure (our liability side) |
+| **PFE(t)** | The α-percentile of exposure at *t* (peak-risk / limit metric) |
+| **CVA** | LGD × Σ discounted-EE × marginal default probability — the price of default risk |
+
+## Tests
+
+```bash
+pytest -q
+```
+
+Benchmarks include: Hull–White reprices the initial curve at t0 (1e-10), option
+value at t0 equals Black–Scholes, par swap is ~0 at t0, `CSA(MPoR=0, threshold=∞)`
+equals uncollateralized exactly, CVA of a flat-EE constant-hazard case matches the
+closed form, and Monte Carlo error shrinks with path count.
+
+## Assumptions & extensions
+
+Unilateral CVA assumes exposure/default independence (no wrong-way risk); in-flight
+swap accrual periods are dropped (a small approximation on typical grids). Natural
+extensions: bilateral CVA/DVA, initial margin (SIMM), stochastic basis, model
+calibration to swaptions / option vols, curve bootstrapping, and more instruments.
 
 ## License
 

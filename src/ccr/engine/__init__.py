@@ -2,7 +2,7 @@
 
 from .collateral import CSA, Collateral, Uncollateralized
 from .netting import NettingSet
-from .simulation import run, simulate_factors
+from .simulation import RunDiagnostics, run, run_detailed, simulate_factors
 
 __all__ = [
     "NettingSet",
@@ -10,5 +10,7 @@ __all__ = [
     "Uncollateralized",
     "CSA",
     "run",
+    "run_detailed",
+    "RunDiagnostics",
     "simulate_factors",
 ]

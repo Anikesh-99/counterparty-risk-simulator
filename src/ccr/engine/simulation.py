@@ -8,6 +8,7 @@ amount). CVA integrates discounted EE against the hazard curve.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -43,13 +44,24 @@ def simulate_factors(cfg: "ScenarioConfig") -> FactorPaths:
     return FactorPaths(grid=grid, rates=rates, equity=equity, basis_spread=m.basis_spread)
 
 
-def run(cfg: "ScenarioConfig") -> ExposureResult:
-    """Run the full counterparty-risk simulation and return metrics."""
+@dataclass
+class RunDiagnostics:
+    """Full run output including the raw cubes (for plotting/inspection)."""
+
+    result: ExposureResult
+    factors: FactorPaths
+    exposure: np.ndarray  # collateralized positive exposure cube
+    net_mtm: np.ndarray  # signed netted MtM cube
+
+
+def run_detailed(cfg: "ScenarioConfig") -> RunDiagnostics:
+    """Run the simulation and return metrics plus the underlying cubes."""
     factors = simulate_factors(cfg)
     ns = NettingSet(cfg.portfolio, cfg.collateral, name=cfg.name)
 
-    exposure = ns.exposure(factors)  # collateralized positive exposure
-    neg_exposure = ns.negative_exposure(factors)
+    net_mtm = ns.net_mtm(factors)
+    exposure = ns.collateral.exposure(net_mtm, factors.grid)
+    neg_exposure = np.minimum(net_mtm, 0.0)
     discount = factors.rates.discount_0t  # pathwise (n_paths, n_points)
     times = factors.grid.times
 
@@ -57,18 +69,20 @@ def run(cfg: "ScenarioConfig") -> ExposureResult:
     ene = expected_negative_exposure(neg_exposure, discount)
     pfe_profile = pfe(exposure, cfg.sim.pfe_level)  # undiscounted PFE
 
-    epe = expected_positive_exposure(ee, times)
-    max_pfe = float(pfe_profile.max())
-    cva_value = compute_cva(ee, times, cfg.hazard)
-
-    return ExposureResult(
+    result = ExposureResult(
         times=times,
         ee=ee,
         ene=ene,
         pfe=pfe_profile,
-        epe=epe,
-        max_pfe=max_pfe,
-        cva=cva_value,
+        epe=expected_positive_exposure(ee, times),
+        max_pfe=float(pfe_profile.max()),
+        cva=compute_cva(ee, times, cfg.hazard),
         pfe_level=cfg.sim.pfe_level,
         n_paths=cfg.sim.n_paths,
     )
+    return RunDiagnostics(result=result, factors=factors, exposure=exposure, net_mtm=net_mtm)
+
+
+def run(cfg: "ScenarioConfig") -> ExposureResult:
+    """Run the full counterparty-risk simulation and return metrics."""
+    return run_detailed(cfg).result
