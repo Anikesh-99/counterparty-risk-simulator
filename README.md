@@ -24,10 +24,15 @@ GBM equity        ─┘        along every path            (CSA, MPoR)
 - **Collateralized netting sets** — a **CSA** with threshold, minimum transfer
   amount, and a **margin period of risk**, so collateral realistically lags exposure.
 - **Industry metrics** — Expected Exposure (**EE/EPE/ENE**), Potential Future
-  Exposure (**PFE**) at a chosen confidence, and unilateral **CVA** from a
-  hazard-rate / CDS-implied default curve.
+  Exposure (**PFE**) at a chosen confidence, and **CVA / DVA / bilateral CVA** from
+  hazard-rate / CDS-implied default curves.
+- **Wrong-way risk** — a factor-tilted stochastic default intensity correlates
+  default with exposure (mean-preserving, so β=0 reproduces the independent CVA
+  exactly); β>0 with a matching driver inflates CVA the way real WWR does.
+- **Initial margin (SIMM-lite)** — an IM add-on on top of variation margin, sized to
+  a high quantile of residual exposure, clipping exposure to the far tail.
 - **Correct-by-construction** — the Hull–White model reprices today's discount curve
-  to 1e-10; every numerical unit is pinned to an analytic benchmark (**47 tests**).
+  to 1e-10; every numerical unit is pinned to an analytic benchmark (**56 tests**).
 
 ## Install
 
@@ -106,6 +111,27 @@ Design notes: `docs/superpowers/specs/2026-08-20-counterparty-risk-simulator-des
 | **ENE(t)** | Mean discounted negative exposure (our liability side) |
 | **PFE(t)** | The α-percentile of exposure at *t* (peak-risk / limit metric) |
 | **CVA** | LGD × Σ discounted-EE × marginal default probability — the price of default risk |
+| **DVA** | The mirror of CVA on *your* default, using negative exposure — a benefit to you |
+| **BCVA** | Bilateral CVA = CVA − DVA — the net XVA charge |
+
+### Advanced XVA controls
+
+```python
+from ccr.metrics import HazardCurve, WrongWayModel
+from ccr.engine import CSA
+
+scenario.own_hazard = HazardCurve.from_cds_spread(80, recovery=0.4)      # -> DVA / BCVA
+scenario.wrong_way  = WrongWayModel(scenario.hazard, beta=1.2, driver="equity")  # WWR
+scenario.collateral = CSA(0, 0, 10/252, initial_margin=True, im_quantile=0.99)   # VM + IM
+```
+
+- **Bilateral CVA/DVA**: set `own_hazard`; each leg is conditioned on the other
+  party surviving (first-to-default approximation).
+- **Wrong-way risk**: set `wrong_way`; `beta>0` raises the counterparty's hazard when
+  the driver (equity/rate) is high. Pick the driver/sign so hazard rises with
+  exposure. `beta=0` recovers the independent CVA.
+- **Initial margin**: `initial_margin=True` on the CSA adds an IM buffer sized to the
+  `im_quantile` of residual (post-VM) exposure.
 
 ## Tests
 
@@ -120,9 +146,9 @@ closed form, and Monte Carlo error shrinks with path count.
 
 ## Assumptions & extensions
 
-Unilateral CVA assumes exposure/default independence (no wrong-way risk); in-flight
-swap accrual periods are dropped (a small approximation on typical grids). Natural
-extensions: bilateral CVA/DVA, initial margin (SIMM), stochastic basis, model
+In-flight swap accrual periods are dropped (a small approximation on typical grids);
+the WWR intensity tilt and SIMM-lite IM are simplified proxies of their full models.
+Natural next extensions: full ISDA SIMM sensitivities, stochastic basis, model
 calibration to swaptions / option vols, curve bootstrapping, and more instruments.
 
 ## License

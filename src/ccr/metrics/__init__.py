@@ -1,6 +1,6 @@
 """Metrics: exposure profiles (EE/ENE/EPE/PFE) and CVA."""
 
-from .cva import HazardCurve, cva
+from .cva import HazardCurve, bilateral_cva, cva, cva_pathwise
 from .exposure import (
     expected_exposure,
     expected_negative_exposure,
@@ -8,6 +8,7 @@ from .exposure import (
     pfe,
 )
 from .results import ExposureResult
+from .wrongway import WrongWayModel
 
 __all__ = [
     "expected_exposure",
@@ -16,5 +17,8 @@ __all__ = [
     "pfe",
     "HazardCurve",
     "cva",
+    "bilateral_cva",
+    "cva_pathwise",
+    "WrongWayModel",
     "ExposureResult",
 ]

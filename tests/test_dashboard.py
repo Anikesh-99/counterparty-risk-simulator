@@ -18,3 +18,18 @@ def test_dashboard_runs_clean():
     labels = [m.label for m in at.metric]
     assert "CVA" in labels
     assert "EPE" in labels
+
+
+def test_dashboard_with_all_features_enabled():
+    at = AppTest.from_file(str(APP), default_timeout=120).run()
+    for cb in at.checkbox:
+        if cb.label in (
+            "Bilateral (include own default / DVA)",
+            "Enable WWR",
+            "Initial margin (SIMM-lite)",
+        ):
+            cb.set_value(True)
+    at.run()
+    assert not at.exception
+    labels = [m.label for m in at.metric]
+    assert "DVA" in labels and "BCVA" in labels

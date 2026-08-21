@@ -15,6 +15,7 @@ from .metrics.cva import HazardCurve
 if TYPE_CHECKING:
     from .engine.collateral import Collateral
     from .instruments.base import Instrument
+    from .metrics.wrongway import WrongWayModel
 
 
 @dataclass
@@ -52,6 +53,8 @@ class ScenarioConfig:
     sim: SimConfig = field(default_factory=SimConfig)
     collateral: "Collateral | None" = None
     hazard: HazardCurve = field(default_factory=HazardCurve)
+    own_hazard: HazardCurve | None = None
+    wrong_way: "WrongWayModel | None" = None
     name: str = "scenario"
 
     def __post_init__(self) -> None:

@@ -84,3 +84,62 @@ def cva(ee_discounted: np.ndarray, times: np.ndarray, hazard: HazardCurve) -> fl
     pd = hazard.marginal_pd(times)  # (n_steps,)
     ee_mid = 0.5 * (ee_discounted[:-1] + ee_discounted[1:])  # (n_steps,)
     return float(hazard.lgd * np.sum(ee_mid * pd))
+
+
+def bilateral_cva(
+    ee_discounted: np.ndarray,
+    ene_discounted: np.ndarray,
+    times: np.ndarray,
+    cpty_hazard: HazardCurve,
+    own_hazard: HazardCurve | None = None,
+) -> tuple[float, float, float]:
+    """Bilateral CVA/DVA: returns ``(cva, dva, bcva)`` with ``bcva = cva - dva``.
+
+    Each leg is conditioned on the *other* party surviving to the default time
+    (the standard first-to-default approximation):
+
+        CVA = LGD_c * sum EE*_mid * dPD_c * S_own_mid
+        DVA = LGD_o * sum |ENE*_mid| * dPD_o * S_cpty_mid
+
+    With ``own_hazard=None`` this reduces to unilateral CVA (DVA = 0), matching
+    :func:`cva`.
+    """
+    times = np.asarray(times, dtype=float)
+    s_c = cpty_hazard.survival(times)
+    pd_c = s_c[:-1] - s_c[1:]
+    ee_mid = 0.5 * (ee_discounted[:-1] + ee_discounted[1:])
+
+    if own_hazard is None:
+        cva_val = float(cpty_hazard.lgd * np.sum(ee_mid * pd_c))
+        return cva_val, 0.0, cva_val
+
+    s_o = own_hazard.survival(times)
+    pd_o = s_o[:-1] - s_o[1:]
+    s_o_mid = 0.5 * (s_o[:-1] + s_o[1:])
+    s_c_mid = 0.5 * (s_c[:-1] + s_c[1:])
+
+    cva_val = float(cpty_hazard.lgd * np.sum(ee_mid * pd_c * s_o_mid))
+    ene_mag_mid = 0.5 * (-ene_discounted[:-1] - ene_discounted[1:])  # ENE <= 0
+    dva_val = float(own_hazard.lgd * np.sum(ene_mag_mid * pd_o * s_c_mid))
+    return cva_val, dva_val, cva_val - dva_val
+
+
+def cva_pathwise(
+    exposure: np.ndarray,
+    discount: np.ndarray,
+    survival: np.ndarray,
+    lgd: float,
+) -> float:
+    """Pathwise CVA supporting wrong-way risk.
+
+    ``CVA = LGD * mean_p sum_k E_i(t_k)_mid * D_i(t_k)_mid * [S_i(t_{k-1}) - S_i(t_k)]``
+
+    Because exposure, discount, and per-path survival share the path index, any
+    correlation between exposure and default intensity (WWR) is captured directly.
+    Reduces to the independent CVA when survival is identical across paths.
+    """
+    e_mid = 0.5 * (exposure[:, :-1] + exposure[:, 1:])
+    d_mid = 0.5 * (discount[:, :-1] + discount[:, 1:])
+    pd = survival[:, :-1] - survival[:, 1:]
+    per_path = np.sum(e_mid * d_mid * pd, axis=1)
+    return float(lgd * per_path.mean())

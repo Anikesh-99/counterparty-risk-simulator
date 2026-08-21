@@ -16,7 +16,7 @@ import streamlit as st
 from ccr.config import MarketConfig, ScenarioConfig, SimConfig
 from ccr.engine import CSA, Uncollateralized, run_detailed
 from ccr.instruments import EuropeanEquityOption, InterestRateSwap
-from ccr.metrics import HazardCurve
+from ccr.metrics import HazardCurve, WrongWayModel
 
 st.set_page_config(page_title="Counterparty Risk Simulator", layout="wide")
 st.title("Monte Carlo Counterparty Risk Simulator")
@@ -73,13 +73,30 @@ def build_scenario() -> ScenarioConfig:
         threshold = sb.number_input("Threshold", 0.0, 1e8, 2.5e5, step=5e4, format="%.0f")
         mta = sb.number_input("Min transfer amount", 0.0, 1e8, 5e4, step=1e4, format="%.0f")
         mpor_days = sb.slider("MPoR (business days)", 1, 40, 10)
-        collateral = CSA(threshold, mta, mpor_days / 252.0)
+        use_im = sb.checkbox("Initial margin (SIMM-lite)", value=False)
+        im_q = sb.slider("IM quantile", 0.90, 0.999, 0.99, 0.005) if use_im else 0.99
+        collateral = CSA(threshold, mta, mpor_days / 252.0,
+                         initial_margin=use_im, im_quantile=im_q)
     else:
         collateral = Uncollateralized()
 
     sb.header("Credit")
-    cds = sb.slider("CDS spread (bp)", 10, 1000, 150, 10)
+    cds = sb.slider("Counterparty CDS (bp)", 10, 1000, 150, 10)
     recovery = sb.slider("Recovery", 0.0, 0.9, 0.4, 0.05)
+    bilateral = sb.checkbox("Bilateral (include own default / DVA)", value=False)
+    own_hazard = None
+    if bilateral:
+        own_cds = sb.slider("Own CDS (bp)", 10, 1000, 80, 10)
+        own_hazard = HazardCurve.from_cds_spread(own_cds, recovery)
+
+    sb.header("Wrong-way risk")
+    use_wwr = sb.checkbox("Enable WWR", value=False)
+    wrong_way = None
+    cpty_hazard = HazardCurve.from_cds_spread(cds, recovery)
+    if use_wwr:
+        driver = sb.selectbox("Driver", ["equity", "rate"])
+        beta = sb.slider("WWR strength beta (>0 wrong-way)", -3.0, 3.0, 1.0, 0.1)
+        wrong_way = WrongWayModel(cpty_hazard, beta=beta, driver=driver)
 
     sb.header("Simulation")
     n_paths = sb.select_slider("Paths", [2000, 5000, 10000, 20000, 40000], value=10000)
@@ -98,7 +115,9 @@ def build_scenario() -> ScenarioConfig:
         sim=SimConfig(n_paths=int(n_paths), n_steps=int(n_steps), horizon=horizon,
                       seed=int(seed), pfe_level=pfe_level),
         collateral=collateral,
-        hazard=HazardCurve.from_cds_spread(cds, recovery),
+        hazard=cpty_hazard,
+        own_hazard=own_hazard,
+        wrong_way=wrong_way,
     )
 
 
@@ -111,11 +130,13 @@ diag = run_detailed(scenario)
 res, factors = diag.result, diag.factors
 t = res.times
 
-c1, c2, c3, c4 = st.columns(4)
+c1, c2, c3, c4, c5, c6 = st.columns(6)
 c1.metric("EPE", f"{res.epe:,.0f}")
 c2.metric(f"Max PFE @{res.pfe_level:.1%}", f"{res.max_pfe:,.0f}")
 c3.metric("CVA", f"{res.cva:,.0f}")
-c4.metric("Paths", f"{res.n_paths:,}")
+c4.metric("DVA", f"{res.dva:,.0f}")
+c5.metric("BCVA", f"{res.bcva:,.0f}")
+c6.metric("Paths", f"{res.n_paths:,}")
 
 # Exposure profile
 fig = go.Figure()

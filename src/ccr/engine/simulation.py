@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from ..metrics.cva import cva as compute_cva
+from ..metrics.cva import bilateral_cva, cva_pathwise
 from ..metrics.exposure import (
     expected_exposure,
     expected_negative_exposure,
@@ -69,6 +69,17 @@ def run_detailed(cfg: "ScenarioConfig") -> RunDiagnostics:
     ene = expected_negative_exposure(neg_exposure, discount)
     pfe_profile = pfe(exposure, cfg.sim.pfe_level)  # undiscounted PFE
 
+    # Bilateral CVA/DVA (own_hazard=None -> unilateral, DVA=0).
+    cva_val, dva_val, bcva_val = bilateral_cva(ee, ene, times, cfg.hazard, cfg.own_hazard)
+
+    # Wrong-way risk: replace the counterparty CVA with a pathwise computation
+    # where default intensity is tilted by a simulated driver (correlated with
+    # exposure). DVA is left independent for simplicity; BCVA is recomputed.
+    if cfg.wrong_way is not None:
+        survival = cfg.wrong_way.pathwise_survival(factors)
+        cva_val = cva_pathwise(exposure, discount, survival, cfg.wrong_way.lgd)
+        bcva_val = cva_val - dva_val
+
     result = ExposureResult(
         times=times,
         ee=ee,
@@ -76,7 +87,9 @@ def run_detailed(cfg: "ScenarioConfig") -> RunDiagnostics:
         pfe=pfe_profile,
         epe=expected_positive_exposure(ee, times),
         max_pfe=float(pfe_profile.max()),
-        cva=compute_cva(ee, times, cfg.hazard),
+        cva=cva_val,
+        dva=dva_val,
+        bcva=bcva_val,
         pfe_level=cfg.sim.pfe_level,
         n_paths=cfg.sim.n_paths,
     )

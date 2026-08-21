@@ -73,11 +73,24 @@ Every numerical unit is pinned to an analytic benchmark: HW reprices the input
 curve at t0 to 1e-10; option value at t0 equals Black–Scholes; par swap is ~0 at
 t0; `CSA(MPoR=0, threshold=∞) ≡ Uncollateralized` exactly; CVA of a flat-EE,
 constant-hazard case matches the closed form; EPE Monte Carlo error shrinks with
-path count. Plus CLI and dashboard smoke tests. (47 tests.)
+path count; β=0 WWR reproduces the independent CVA; IM reduces residual exposure.
+Plus CLI and dashboard smoke tests. (56 tests.)
 
-## Assumptions & documented extensions
+## v0.2 additions (implemented)
 
-- Unilateral CVA assumes **exposure/default independence** (no wrong-way risk).
+- **Bilateral CVA/DVA** (`metrics.cva.bilateral_cva`): DVA from discounted ENE and an
+  own-hazard curve; each leg conditioned on the other party's survival. `own_hazard`
+  on the scenario turns it on; `ExposureResult` gains `dva` and `bcva`.
+- **Wrong-way risk** (`metrics.wrongway.WrongWayModel`): a mean-preserving factor tilt
+  of the counterparty intensity, `lambda_i = lambda_base * exp(beta z_i)/mean_p[exp(beta z)]`,
+  feeding a pathwise CVA (`metrics.cva.cva_pathwise`). `beta=0` reproduces the
+  independent CVA exactly; `beta>0` with a matching driver inflates it.
+- **Initial margin (SIMM-lite)** (`engine.collateral.CSA`): `initial_margin=True` adds
+  an IM buffer sized to the `im_quantile` of residual post-VM exposure per node.
+
+## Remaining assumptions & extensions
+
 - In-flight swap accrual periods are dropped (small approximation on typical grids).
-- Extensions: bilateral CVA/DVA, initial margin (SIMM), stochastic basis, model
+- WWR tilt and SIMM-lite IM are simplified proxies of the full models.
+- Further extensions: full ISDA SIMM sensitivities, stochastic basis, model
   calibration to swaptions/vols, curve bootstrapping, more instruments.

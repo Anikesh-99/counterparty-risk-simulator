@@ -57,6 +57,8 @@ class CSA(Collateral):
         threshold: float = 0.0,
         min_transfer_amount: float = 0.0,
         mpor_years: float = 10.0 / 252.0,
+        initial_margin: bool = False,
+        im_quantile: float = 0.99,
     ) -> None:
         if threshold < 0:
             raise ValueError("threshold must be non-negative.")
@@ -64,9 +66,13 @@ class CSA(Collateral):
             raise ValueError("min_transfer_amount must be non-negative.")
         if mpor_years < 0:
             raise ValueError("mpor_years must be non-negative.")
+        if not 0.0 < im_quantile < 1.0:
+            raise ValueError("im_quantile must be in (0, 1).")
         self.threshold = float(threshold)
         self.mta = float(min_transfer_amount)
         self.mpor_years = float(mpor_years)
+        self.initial_margin = bool(initial_margin)
+        self.im_quantile = float(im_quantile)
 
     def _required(self, v: np.ndarray) -> np.ndarray:
         """Collateral the counterparty must have posted to us given net MtM ``v``.
@@ -95,4 +101,12 @@ class CSA(Collateral):
                 prev = prev + move
                 held[:, k] = prev
 
-        return np.maximum(net_mtm - held, 0.0)
+        residual = np.maximum(net_mtm - held, 0.0)
+        if not self.initial_margin:
+            return residual
+
+        # SIMM-lite: initial margin sized to a high quantile of the post-VM
+        # residual exposure at each node (a portfolio-level amount), leaving only
+        # the far tail. Held both ways, so it clips exposure to the (1-q) tail.
+        im = np.quantile(residual, self.im_quantile, axis=0)  # (n_points,)
+        return np.maximum(residual - im[None, :], 0.0)
